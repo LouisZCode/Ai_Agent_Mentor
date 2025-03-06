@@ -16,6 +16,7 @@ def simple_agent(memory):
 
     # First, build a properly formatted conversation history
     formatted_conversation = ""
+
     # Loop through each item in memory and format it
     for item in memory:
         if "user" in item:
@@ -53,6 +54,7 @@ while chatting:
 
     question = input("You:\n")
     memory.append({"user" : question})
+
 
     response = simple_agent(memory)
     memory.append({"agent" : response})
