@@ -369,16 +369,17 @@ class ChatbotView:
         # Calculate bar width based on level
         bar_width = int(width * level)
         
-        # Determine color based on level
-        if level < 0.3:
-            color = "#4CAF50"  # Green
-        elif level < 0.6:
-            color = "#FFC107"  # Yellow
-        else:
-            color = "#F44336"  # Red
-        
-        # Draw the audio level bar
-        if bar_width > 0:
+        # Only show visualization if the level is above a minimal threshold
+        if level > 0.01:  # Skip drawing for very low levels (silence)
+            # Determine color based on level
+            if level < 0.3:
+                color = "#4CAF50"  # Green for low levels
+            elif level < 0.6:
+                color = "#FFC107"  # Yellow for medium levels
+            else:
+                color = "#F44336"  # Red for high levels
+            
+            # Draw the audio level bar
             self.audio_viz_canvas.create_rectangle(
                 0, 0, bar_width, height, 
                 fill=color, outline="", width=0

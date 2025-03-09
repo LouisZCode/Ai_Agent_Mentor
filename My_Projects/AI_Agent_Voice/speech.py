@@ -90,8 +90,8 @@ class SpeechRecognizer:
         # Audio level monitoring
         self.current_audio_level = 0.0
         self.audio_level_lock = threading.Lock()
-        self.audio_level_decay = 0.8  # How quickly the level falls (lower = faster)
-        self.audio_level_scale = 5.0  # Multiplier to make levels more visible
+        self.audio_level_decay = 0.7  # How quickly the level falls (lower = faster)
+        self.audio_level_scale = 8.0  # Multiplier to make levels more visible
     
     def find_device_by_name(self, name_substring):
         """Find a device by substring in its name"""
@@ -114,15 +114,18 @@ class SpeechRecognizer:
         self.audio_queue.put(bytes(indata))
         
         # Calculate energy level (for silence detection)
-        energy = np.mean(np.abs(indata))
+        # Use RMS (root mean square) for better sensitivity
+        energy = np.sqrt(np.mean(np.square(indata)))
         
         # Update audio level meter (with lock for thread safety)
         with self.audio_level_lock:
             # If new level is higher, jump to it immediately
             if energy > self.current_audio_level:
+                # Fast attack - jump to new level
                 self.current_audio_level = energy
             # Otherwise decay slowly toward zero
             else:
+                # Smooth release - decay toward zero
                 self.current_audio_level = self.current_audio_level * self.audio_level_decay
         
         # Simple silence detection
@@ -137,8 +140,15 @@ class SpeechRecognizer:
     def get_audio_level(self):
         """Get the current audio input level (normalized)"""
         with self.audio_level_lock:
-            # Scale and clamp between 0.0 and 1.0
-            level = min(1.0, max(0.0, self.current_audio_level * self.audio_level_scale))
+            # Scale the level
+            scaled_level = self.current_audio_level * self.audio_level_scale
+            
+            # Return 0 for very low levels to ensure no visualization during silence
+            if scaled_level < 0.02:
+                return 0.0
+                
+            # Clamp between 0.0 and 1.0
+            level = min(1.0, max(0.0, scaled_level))
             return level
     
     def process_audio(self):
