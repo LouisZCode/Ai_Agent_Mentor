@@ -1,6 +1,7 @@
 import threading
 import queue
 from speech import SpeechRecognizer
+from tts import TextToSpeech
 
 class ChatbotController:
     """
@@ -16,6 +17,33 @@ class ChatbotController:
         self.selected_mic_index = None
         self.default_device_name = "Input 1 (2- SSL 2 USB Audio Dev)"  # Fixed closing parenthesis
         
+        # Initialize text-to-speech
+        self.tts = None
+        self.tts_enabled = False
+        self.tts_init_checked = False
+        try:
+            # Try to initialize the TTS engine
+            self.tts = TextToSpeech()
+            
+            # Print audio device information to help debug issues
+            try:
+                self.tts.debug_audio_devices()
+            except Exception as e:
+                print(f"Could not print audio device info: {e}")
+            
+            # Update UI to show initialization is in progress
+            voice_list = ["Initializing..."]
+            self.view.update_voice_list(voice_list)
+            self.view.set_status(f"TTS initializing - please wait...")
+            
+            # Start a timer to check for TTS initialization completion
+            self.view.root.after(2000, self.check_tts_initialization)
+            
+        except Exception as e:
+            print(f"Error initializing TTS: {e}")
+            self.view.update_voice_list(["TTS Error"])
+            self.view.set_status("TTS initialization failed")
+        
         # Connect view callbacks
         self.view.set_send_callback(self.handle_user_message)
         self.view.set_reset_callback(self.reset_conversation)
@@ -23,7 +51,9 @@ class ChatbotController:
         self.view.set_voice_toggle_callback(self.handle_voice_toggle)
         self.view.set_select_mic_callback(self.handle_mic_selection)
         
-        # Audio level callback removed
+        # Set callbacks for TTS controls
+        self.view.set_tts_toggle_callback(self.handle_tts_toggle)
+        self.view.set_voice_change_callback(self.handle_voice_change)
         
         # Initialize model with the default selection from view
         self.model.model_name = self.view.get_selected_model()
@@ -44,7 +74,73 @@ class ChatbotController:
         except Exception as e:
             print(f"Error finding default microphone: {e}")
     
-    # Audio level method removed
+    def check_tts_initialization(self):
+        """Check if TTS initialization is complete"""
+        if not self.tts:
+            self.view.set_status("TTS not available")
+            self.view.update_voice_list(["No TTS Available"])
+            self.tts_init_checked = True
+            return
+            
+        if hasattr(self.tts, 'is_initialized'):
+            if self.tts.is_initialized:
+                # TTS is initialized, update UI
+                voices = self.tts.get_available_speakers()
+                self.view.update_voice_list(voices)
+                self.view.set_status("TTS initialized and ready")
+                self.view.tts_checkbox.config(state="normal") # Enable the TTS checkbox
+                self.tts_init_checked = True
+                print("TTS initialization complete!")
+            else:
+                # Still initializing, check again in 2 seconds
+                self.view.root.after(2000, self.check_tts_initialization)
+        else:
+            # No initialization property, assume it failed
+            self.view.update_voice_list(["TTS Error"])
+            self.view.set_status("TTS initialization missing")
+            self.tts_init_checked = True
+    
+    def handle_tts_toggle(self, enabled):
+        """Handle TTS toggle in the UI"""
+        self.tts_enabled = enabled
+        
+        # If initialization check wasn't completed, do it now
+        if not self.tts_init_checked:
+            self.check_tts_initialization()
+        
+        # Check if TTS is actually available
+        if enabled and not self.tts:
+            self.view.set_status("TTS not available - see console for details")
+            # Reset the toggle in the UI
+            self.view.tts_enabled.set(False)
+            self.tts_enabled = False
+            return
+            
+        if enabled and not hasattr(self.tts, 'is_initialized') or not self.tts.is_initialized:
+            self.view.set_status("TTS still initializing - please wait")
+            # Reset the toggle in the UI
+            self.view.tts_enabled.set(False)
+            self.tts_enabled = False
+            return
+        
+        # Stop any current speech if disabling
+        if not enabled and self.tts:
+            self.tts.stop()
+            
+        self.view.set_status(f"AI voice {'enabled' if enabled else 'disabled'}")
+
+    def handle_voice_change(self, voice_name):
+        """Handle voice selection change"""
+        if self.tts and hasattr(self.tts, 'is_initialized') and self.tts.is_initialized:
+            success = self.tts.set_speaker(voice_name)
+            if success:
+                self.view.set_status(f"Voice changed to {voice_name}")
+            else:
+                self.view.set_status(f"Could not set voice to {voice_name}")
+                print(f"Failed to set voice to {voice_name}")
+        else:
+            self.view.set_status("Cannot change voice - TTS not initialized")
+            print("Cannot change voice - TTS not available or not initialized")
     
     def reset_conversation(self):
         """Reset the conversation to initial state"""
@@ -220,9 +316,21 @@ class ChatbotController:
         """Check for responses in the queue and update UI"""
         if not self.response_queue.empty():
             response = self.response_queue.get()
-            self.view.display_ai_response(response)
+            
+            # Create a sentence speaker function for progressive TTS
+            def speak_sentence(sentence):
+                if self.tts_enabled and self.tts and hasattr(self.tts, 'is_initialized') and self.tts.is_initialized:
+                    print(f"Speaking sentence: '{sentence}'")
+                    self.tts.speak(sentence)
+            
+            # Only use progressive speech if TTS is enabled
+            speak_callback = None
+            if self.tts_enabled and self.tts and hasattr(self.tts, 'is_initialized') and self.tts.is_initialized:
+                speak_callback = speak_sentence
+                print("Progressive speech enabled - will speak as text displays")
+            
+            # Display the response with progressive speech
+            self.view.display_ai_response(response, speak_callback=speak_callback)
+                    
             self.view.set_status("Ready")
             self.view.set_input_enabled(True)
-            
-            # Ensure the next voice input will get a fresh speaker line
-            # This is crucial to fix the issue with missing "You (voice):" for subsequent inputs

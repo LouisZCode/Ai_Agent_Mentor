@@ -126,6 +126,8 @@ class ChatbotView:
         self.model_change_callback = None
         self.voice_toggle_callback = None
         self.select_mic_callback = None
+        self.tts_toggle_callback = None
+        self.voice_change_callback = None
     
     def _setup_ui(self):
         """Set up the UI components"""
@@ -181,8 +183,6 @@ class ChatbotView:
         )
         self.mic_button.pack(side=tk.LEFT, padx=(0, 10))
         
-        # Remove audio visualization elements
-        
         # Voice input toggle button
         self.voice_active = False
         self.voice_button = ttk.Button(
@@ -190,7 +190,38 @@ class ChatbotView:
             text="🎤 Enable Voice",
             command=self._on_voice_toggle
         )
-        self.voice_button.pack(side=tk.LEFT, padx=(0, 0))
+        self.voice_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # TTS controls
+        tts_frame = ttk.Frame(toolbar_frame)
+        tts_frame.pack(side=tk.RIGHT, padx=(20, 0))
+        
+        # TTS label
+        ttk.Label(tts_frame, text="AI Voice:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        # TTS toggle
+        self.tts_enabled = BooleanVar(value=False)
+        self.tts_checkbox = ttk.Checkbutton(
+            tts_frame,
+            text="Enable",
+            variable=self.tts_enabled,
+            command=self._on_tts_toggle
+        )
+        self.tts_checkbox.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Disable TTS checkbox initially until TTS is confirmed ready
+        self.tts_checkbox.config(state="disabled")
+        
+        # Voice selection dropdown
+        self.voice_var = StringVar(value="Default")
+        self.voice_dropdown = ttk.Combobox(
+            tts_frame,
+            textvariable=self.voice_var,
+            state="readonly",
+            width=15
+        )
+        self.voice_dropdown.pack(side=tk.LEFT)
+        self.voice_dropdown.bind("<<ComboboxSelected>>", self._on_voice_change)
         
         # Update thinking checkbox visibility based on selected model
         self._update_thinking_checkbox_visibility()
@@ -306,6 +337,35 @@ class ChatbotView:
         if self.voice_toggle_callback:
             self.voice_toggle_callback(new_active_state)
     
+    def _on_tts_toggle(self):
+        """Handle TTS toggle"""
+        if self.tts_toggle_callback:
+            self.tts_toggle_callback(self.tts_enabled.get())
+
+    def _on_voice_change(self, event=None):
+        """Handle voice selection change"""
+        if self.voice_change_callback:
+            self.voice_change_callback(self.voice_var.get())
+        
+    def set_tts_toggle_callback(self, callback):
+        """Set callback for TTS toggle"""
+        self.tts_toggle_callback = callback
+        
+    def set_voice_change_callback(self, callback):
+        """Set callback for voice change"""
+        self.voice_change_callback = callback
+        
+    def update_voice_list(self, voices):
+        """Update the list of available voices"""
+        current = self.voice_var.get()
+        self.voice_dropdown['values'] = voices
+        
+        # Keep current selection if possible
+        if current in voices:
+            self.voice_var.set(current)
+        elif voices:
+            self.voice_var.set(voices[0])
+    
     def start_voice_input(self):
         """Initialize the voice input display"""
         # If we already have voice input active, clean up first
@@ -370,8 +430,6 @@ class ChatbotView:
         # Make sure it's visible
         self.conversation_display.see(tk.END)
         self.conversation_display.config(state=tk.DISABLED)
-    
-    # Audio visualization methods removed
     
     def show_microphone_selector(self, microphones):
         """Show microphone selection dialog"""
@@ -546,20 +604,44 @@ class ChatbotView:
             # Animation marks might not exist, or might be invalid
             pass
     
-    def display_ai_response(self, response):
-        """Display an AI response with typing animation"""
+    def display_ai_response(self, response, speak_callback=None):
+        """Display an AI response with typing animation and progressive speech"""
         # Stop the thinking animation (if any)
         self.stop_thinking_animation()
         
         self.conversation_display.config(state=tk.NORMAL)
         # No need to insert "AI:" again as it was already inserted by thinking animation
         
-        # Stream the text with typing effect
+        # Split response into sentences to handle progressive speech
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+', response)
+        
+        current_sentence = ""
+        current_position = 0
+        
+        # Process each character, tracking sentence boundaries
         for char in response:
+            # Add the character to the display
             self.conversation_display.insert(tk.END, char, "ai")
             self.conversation_display.see(tk.END)
             self.conversation_display.update()
+            
+            # Add to current sentence
+            current_sentence += char
+            current_position += 1
+            
+            # Check if we've completed a sentence
+            if char in '.!?' and (current_position >= len(response) or response[current_position].isspace()):
+                # Complete sentence detected - send it for speech if callback provided
+                if speak_callback and current_sentence.strip():
+                    speak_callback(current_sentence.strip())
+                    current_sentence = ""
+            
             time.sleep(0.01)  # Adjust for typing speed
+        
+        # Handle any remaining text as a sentence
+        if speak_callback and current_sentence.strip():
+            speak_callback(current_sentence.strip())
         
         self.conversation_display.insert(tk.END, "\n\n")
         self.conversation_display.see(tk.END)
