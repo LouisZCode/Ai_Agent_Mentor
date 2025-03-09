@@ -1,0 +1,152 @@
+#NOTE  lets create an Agent that uses the ReAct pattern,
+
+
+chatting = True
+import json
+import requests
+import time  # Add this import
+
+#system_message = tbd
+MODEL="qwq:latest"
+#NOTE I wil create a function that will only make the LLM think more about the answer
+#After that, I can pass the original question AND the thinking to the LLM again
+#So it has more context
+
+def thinking_cycle(memory, new_question):
+    """This gets the full conversation history and the new question and makes the LLM think about it"""
+    
+    # Format the full conversation history first
+    formatted_conversation = ""
+    for item in memory:
+        if "system" in item:
+            formatted_conversation += item["system"]
+        elif "user" in item:
+            formatted_conversation += f"<|im_start|>user\n{item['user']}<|im_end|>\n"
+        elif "agent" in item:
+            formatted_conversation += f"<|im_start|>assistant\n{item['agent']}<|im_end|>\n"
+    
+    # Add the new question
+    formatted_conversation += f"<|im_start|>user\n{new_question}<|im_end|>\n"
+    
+    # Add specific thinking instructions
+    formatted_conversation += f"<|im_start|>system\nThink deeply about the user's latest question in the context of the entire conversation. Consider all relevant information from previous exchanges.\n<|im_end|>\n"
+    formatted_conversation += "<|im_start|>assistant\n"
+
+    model_id = MODEL
+    api_endpoint = "http://localhost:11434/api/generate"
+
+
+    response = requests.post(
+        api_endpoint,
+        json={
+            "model": model_id,
+            "prompt": formatted_conversation,
+            "add_generation_prompt": False,
+            "stream": False,
+            "options": {
+                "num_predict": 512 
+            }
+        },
+    )
+        
+    # Extract the thinking from the response
+    result = response.json()
+    thinking = result["response"]
+
+    # For debugging (remove in production)
+    #print("Thinking process:\n", thinking)
+
+    return thinking
+
+
+
+def simple_agent(memory, thinking):
+    """It takes the tought plus the question and gives back an answer"""
+
+    formatted_conversation = ""
+
+    for item in memory:
+        if "system" in item:
+            formatted_conversation += item["system"]  # Use value from dictionary
+        elif "user" in item:
+            formatted_conversation += f"<|im_start|>user\n{item['user']}<|im_end|>\n"
+        elif "agent" in item:
+            formatted_conversation += f"<|im_start|>assistant\n{item['agent']}<|im_end|>\n"
+
+    formatted_conversation += f"<|im_start|>system\nBelow is your detailed thinking about the user's question. Use this analysis to provide a clear, concise, and helpful answer. Do not mention that you've done this thinking process.\n\n{thinking}\n<|im_end|>\n"
+
+    formatted_conversation += "<|im_start|>assistant\n"
+
+
+    # Model name should match exactly as shown in 'ollama list'
+    model_id = MODEL
+    api_endpoint = "http://localhost:11434/api/generate"
+
+
+    response = requests.post(
+        api_endpoint,
+        json={
+            "model": model_id,
+            "prompt": formatted_conversation,
+            "add_generation_prompt": False,
+            "stream": True,
+            "options": {
+                "num_predict": 512 
+            }
+        },
+        stream=True  
+    )
+    
+    full_response = ""
+    
+    print("\nAI:\n", end="", flush=True)
+    
+    for line in response.iter_lines():
+        if line:
+            chunk = json.loads(line)
+            
+            chunk_text = chunk.get("response", "")
+            
+            if chunk.get("done", False):
+                break
+
+            time.sleep(0.03) 
+                
+            print(chunk_text, end="", flush=True)
+            
+            full_response += chunk_text
+    
+    print("\n")
+    return full_response
+
+
+
+system_message = """<|im_start|>system
+You are a helpful AI assistant that provides clear, accurate, and thoughtful responses.
+<|im_end|>"""
+
+memory = []
+memory.append({"system": system_message})
+
+
+while chatting:
+
+    question = input("You:\n")
+    
+    # Check for exit command
+    if question.lower() == "bye":
+        print("\nAI:\nThanks for the conversation! 🌮\n")
+        chatting = False
+        break
+        
+    # First, get the AI's thinking on the question
+    thinking = thinking_cycle(memory, question)
+
+    memory.append({"user": question})
+
+    # Now pass both the original memory and the thinking to get the final response
+    # We need to modify your simple_agent function to accept thinking as an additional parameter
+    response = simple_agent(memory, thinking)
+
+    # Store the response in memory
+    memory.append({"agent": response})
