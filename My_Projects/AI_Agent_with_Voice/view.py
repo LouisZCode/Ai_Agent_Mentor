@@ -101,7 +101,7 @@ class VoiceCloningDialog:
         self.record_callback = record_callback
         self.clone_callback = clone_callback
         self.dialog = None
-        self.recording = None
+        self.recording = None  # Explicitly initialize to None
         self.is_recording = False
         self.recording_thread = None
         self.progress_var = None
@@ -145,7 +145,7 @@ class VoiceCloningDialog:
         
         # Instructions
         instructions = (
-            "1. Click 'Record Sample' and speak clearly for 5 seconds\n"
+            "1. Click 'Record Sample' and speak clearly for 10 seconds\n"
             "2. Say a full sentence with varied intonation\n"
             "3. Maintain consistent distance from microphone\n"
             "4. Avoid background noise during recording\n"
@@ -177,7 +177,7 @@ class VoiceCloningDialog:
         # Record button
         self.record_button = ttk.Button(
             btn_frame,
-            text="Record Sample (5s)",
+            text="Record Sample (10s)",
             command=self._on_record
         )
         self.record_button.pack(side=tk.LEFT, padx=(0, 10))
@@ -208,7 +208,7 @@ class VoiceCloningDialog:
             return
         
         # Reset previous recording if any
-        self.recording = None
+        self.recording = None  # Explicitly set to None
         self.progress_var.set(0)
         self.status_var.set("Starting recording in 1 second...")
         self.record_button.config(state="disabled")
@@ -226,7 +226,7 @@ class VoiceCloningDialog:
         self.status_var.set("Recording... Speak now!")
         
         # Start a timer to update progress bar
-        self._update_progress_bar(0, 5.0)
+        self._update_progress_bar(0, 10.0)
         
         # Call the record callback
         if self.record_callback:
@@ -250,11 +250,12 @@ class VoiceCloningDialog:
         """Called when recording is complete"""
         self.is_recording = False
         
-        if success:
+        if success and result is not None:  # Ensure result is not None
             self.recording = result
             self.status_var.set("Recording complete! Click 'Clone Voice' to continue.")
             self.clone_button.config(state="normal")
         else:
+            self.recording = None  # Explicitly set to None on failure
             self.status_var.set(f"Recording failed: {result}")
         
         self.record_button.config(state="normal")
@@ -277,7 +278,7 @@ class VoiceCloningDialog:
     
     def _on_clone(self):
         """Handle clone button click"""
-        if not self.recording:
+        if self.recording is None:  # Fixed: Check if recording is None instead of boolean evaluation
             self.status_var.set("No recording available. Record a sample first.")
             return
             
@@ -332,7 +333,7 @@ class ChatbotView:
     def __init__(self, root):
         self.root = root
         self.root.title("Luis AI HUB")
-        self.root.geometry("800x600")
+        self.root.geometry("800x650")  # Increased height for the voice controls
         
         # Animation state variables
         self.animation_timer_id = None
@@ -368,7 +369,7 @@ class ChatbotView:
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Create toolbar frame
+        # Create toolbar frame - TOP SECTION (Model controls only)
         toolbar_frame = ttk.Frame(main_frame)
         toolbar_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         
@@ -404,67 +405,6 @@ class ChatbotView:
         )
         self.show_thinking_check.pack(side=tk.LEFT)
         
-        # Voice controls frame (right side of toolbar)
-        voice_frame = ttk.Frame(toolbar_frame)
-        voice_frame.pack(side=tk.RIGHT, padx=(0, 0))
-        
-        # Microphone selection button
-        self.mic_button = ttk.Button(
-            voice_frame,
-            text="🎤 Select Mic",
-            command=self._on_select_mic
-        )
-        self.mic_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Voice input toggle button
-        self.voice_active = False
-        self.voice_button = ttk.Button(
-            voice_frame,
-            text="🎤 Enable Voice",
-            command=self._on_voice_toggle
-        )
-        self.voice_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # TTS controls
-        tts_frame = ttk.Frame(toolbar_frame)
-        tts_frame.pack(side=tk.RIGHT, padx=(20, 0))
-        
-        # TTS label
-        ttk.Label(tts_frame, text="AI Voice:").pack(side=tk.LEFT, padx=(0, 5))
-        
-        # TTS toggle
-        self.tts_enabled = BooleanVar(value=False)
-        self.tts_checkbox = ttk.Checkbutton(
-            tts_frame,
-            text="Enable",
-            variable=self.tts_enabled,
-            command=self._on_tts_toggle
-        )
-        self.tts_checkbox.pack(side=tk.LEFT, padx=(0, 10))
-        
-        # Disable TTS checkbox initially until TTS is confirmed ready
-        self.tts_checkbox.config(state="disabled")
-        
-        # Voice selection dropdown
-        self.voice_var = StringVar(value="Default")
-        self.voice_dropdown = ttk.Combobox(
-            tts_frame,
-            textvariable=self.voice_var,
-            state="readonly",
-            width=15
-        )
-        self.voice_dropdown.pack(side=tk.LEFT)
-        self.voice_dropdown.bind("<<ComboboxSelected>>", self._on_voice_change)
-        
-        # Voice cloning button
-        self.clone_voice_button = ttk.Button(
-            tts_frame,
-            text="Clone Voice",
-            command=self._on_clone_voice
-        )
-        self.clone_voice_button.pack(side=tk.LEFT, padx=(10, 0))
-        self.clone_voice_button.config(state="disabled")  # Disabled until TTS is ready
-        
         # Update thinking checkbox visibility based on selected model
         self._update_thinking_checkbox_visibility()
         
@@ -493,9 +433,9 @@ class ChatbotView:
         self.voice_line_start = None
         self.voice_text_start = None
         
-        # Create improved input area
+        # Create improved input area - MIDDLE SECTION
         input_frame = ttk.Frame(main_frame)
-        input_frame.pack(fill=tk.X, padx=10, pady=(5, 15))
+        input_frame.pack(fill=tk.X, padx=10, pady=(5, 5))
         
         # Create a custom style for the input field
         input_style = ttk.Style()
@@ -522,6 +462,82 @@ class ChatbotView:
             padding=(10, 15)
         )
         self.send_button.pack(side=tk.RIGHT, padx=(10, 0))
+        
+        # BOTTOM SECTION - Voice controls (now below the input area)
+        voice_section_frame = ttk.LabelFrame(main_frame, text="Voice Controls")
+        voice_section_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        # Create a grid layout for voice controls with column configuration
+        voice_grid = ttk.Frame(voice_section_frame, padding=10)
+        voice_grid.pack(fill=tk.X)
+        voice_grid.columnconfigure(0, weight=1)  # Input section takes 50%
+        voice_grid.columnconfigure(1, weight=1)  # Output section takes 50%
+        
+        # INPUT SECTION - Left side
+        input_controls = ttk.LabelFrame(voice_grid, text="Voice Input")
+        input_controls.grid(row=0, column=0, padx=(0, 10), sticky="ew")
+        
+        input_buttons = ttk.Frame(input_controls, padding=5)
+        input_buttons.pack(fill=tk.X)
+        
+        # Microphone selection button
+        self.mic_button = ttk.Button(
+            input_buttons,
+            text="🎤 Select Mic",
+            command=self._on_select_mic,
+            width=12
+        )
+        self.mic_button.pack(side=tk.LEFT, padx=(0, 10), pady=5)
+        
+        # Voice input toggle button
+        self.voice_active = False
+        self.voice_button = ttk.Button(
+            input_buttons,
+            text="🎤 Enable Voice",
+            command=self._on_voice_toggle,
+            width=12
+        )
+        self.voice_button.pack(side=tk.LEFT, pady=5)
+        
+        # OUTPUT SECTION - Right side
+        output_controls = ttk.LabelFrame(voice_grid, text="AI Voice Output")
+        output_controls.grid(row=0, column=1, sticky="ew")
+        
+        output_frame = ttk.Frame(output_controls, padding=5)
+        output_frame.pack(fill=tk.X)
+        
+        # TTS toggle
+        self.tts_enabled = BooleanVar(value=False)
+        self.tts_checkbox = ttk.Checkbutton(
+            output_frame,
+            text="Enable AI Voice",
+            variable=self.tts_enabled,
+            command=self._on_tts_toggle
+        )
+        self.tts_checkbox.pack(side=tk.LEFT, padx=(0, 10), pady=5)
+        self.tts_checkbox.config(state="disabled")  # Disabled until TTS is ready
+        
+        # Voice selection dropdown
+        ttk.Label(output_frame, text="Voice:").pack(side=tk.LEFT, padx=(0, 5))
+        self.voice_var = StringVar(value="Default")
+        self.voice_dropdown = ttk.Combobox(
+            output_frame,
+            textvariable=self.voice_var,
+            state="readonly",
+            width=15
+        )
+        self.voice_dropdown.pack(side=tk.LEFT, padx=(0, 10), pady=5)
+        self.voice_dropdown.bind("<<ComboboxSelected>>", self._on_voice_change)
+        
+        # Voice cloning button
+        self.clone_voice_button = ttk.Button(
+            output_frame,
+            text="Clone Voice",
+            command=self._on_clone_voice,
+            width=12
+        )
+        self.clone_voice_button.pack(side=tk.LEFT, pady=5)
+        self.clone_voice_button.config(state="disabled")  # Disabled until TTS is ready
         
         # Status bar
         self.status_var = tk.StringVar(value="Ready")

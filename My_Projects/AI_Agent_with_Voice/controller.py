@@ -87,7 +87,7 @@ class ChatbotController:
         def record_callback():
             """Callback to record audio for voice cloning"""
             try:
-                return self.tts.record_voice_sample(duration=5)
+                return self.tts.record_voice_sample(duration=10)
             except Exception as e:
                 print(f"Error recording voice sample: {e}")
                 return False, str(e)
@@ -95,6 +95,17 @@ class ChatbotController:
         def clone_callback(audio_data, voice_name):
             """Callback to clone voice from recorded audio"""
             try:
+                # Verify audio_data is valid
+                if audio_data is None:
+                    print("Error: No audio data provided to clone_callback")
+                    return False, "No audio data available"
+                    
+                # Check if audio data is empty or invalid
+                import numpy as np
+                if isinstance(audio_data, np.ndarray) and (audio_data.size == 0 or np.max(np.abs(audio_data)) < 0.01):
+                    print("Error: Audio data is empty or too quiet")
+                    return False, "Recording seems to be empty or too quiet. Please try again with more volume."
+                
                 success, result = self.tts.clone_voice(audio_data=audio_data, voice_name=voice_name)
                 
                 # If cloning was successful, update the voice list

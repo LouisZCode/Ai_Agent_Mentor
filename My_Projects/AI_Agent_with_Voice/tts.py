@@ -440,7 +440,7 @@ class TextToSpeech:
                 cloned_voices.append(name)
         return cloned_voices
     
-    def record_voice_sample(self, duration=5, sample_rate=24000):
+    def record_voice_sample(self, duration=10, sample_rate=24000):
         """Record a voice sample for cloning"""
         try:
             print(f"Recording voice sample for {duration} seconds...")
@@ -453,9 +453,19 @@ class TextToSpeech:
             # Wait for recording to complete
             sd.wait()
             
+            # Validate recording
+            if recording is None or recording.size == 0:
+                print("Error: No audio data was recorded")
+                return False, "No audio data was recorded"
+            
             # Normalize audio (ensure values are between -1 and 1)
-            if np.max(np.abs(recording)) > 0:
-                recording = recording / np.max(np.abs(recording)) * 0.9
+            max_abs = np.max(np.abs(recording))
+            if max_abs < 0.01:  # Check if recording is too quiet
+                print("Warning: Recording volume may be too low")
+                # Continue anyway, but with a warning
+            
+            if max_abs > 0:
+                recording = recording / max_abs * 0.9
                 
             print("Recording complete!")
             return True, recording
