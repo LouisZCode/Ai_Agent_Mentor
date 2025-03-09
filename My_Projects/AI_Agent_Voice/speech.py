@@ -91,7 +91,12 @@ class SpeechRecognizer:
         self.current_audio_level = 0.0
         self.audio_level_lock = threading.Lock()
         self.audio_level_decay = 0.7  # How quickly the level falls (lower = faster)
-        self.audio_level_scale = 8.0  # Multiplier to make levels more visible
+        
+        # Dynamic level scaling
+        self.max_observed_level = 0.05  # Initial baseline (will adjust automatically)
+        self.max_level_decay = 0.9999  # Very slow decay for max level (0.9999 = retains max for longer)
+        self.target_max_scale = 0.8  # We aim to map the max level to this percentage of the full range
+        self.min_scale_factor = 5.0  # Minimum scale factor to avoid too low sensitivity
     
     def find_device_by_name(self, name_substring):
         """Find a device by substring in its name"""
@@ -127,6 +132,16 @@ class SpeechRecognizer:
             else:
                 # Smooth release - decay toward zero
                 self.current_audio_level = self.current_audio_level * self.audio_level_decay
+            
+            # Dynamic range adjustment - track maximum observed level
+            if energy > self.max_observed_level:
+                # Update maximum (fast attack for new peaks)
+                self.max_observed_level = energy
+                # Print when max level changes significantly
+                print(f"New max audio level: {energy:.6f}")
+            else:
+                # Very slow decay for maximum to adapt to quieter environments over time
+                self.max_observed_level = self.max_observed_level * self.max_level_decay
         
         # Simple silence detection
         if energy > self.silence_threshold:
@@ -140,8 +155,19 @@ class SpeechRecognizer:
     def get_audio_level(self):
         """Get the current audio input level (normalized)"""
         with self.audio_level_lock:
-            # Scale the level
-            scaled_level = self.current_audio_level * self.audio_level_scale
+            # Prevent division by zero and ensure min sensitivity
+            if self.max_observed_level < 0.001:
+                scale_factor = self.min_scale_factor
+            else:
+                # Calculate dynamic scale factor based on observed maximum
+                # This ensures the max level will map to target_max_scale (e.g., 0.8)
+                scale_factor = self.target_max_scale / self.max_observed_level
+                
+                # Ensure scale factor doesn't go below minimum
+                scale_factor = max(scale_factor, self.min_scale_factor)
+            
+            # Scale the level using the dynamic scale factor
+            scaled_level = self.current_audio_level * scale_factor
             
             # Return 0 for very low levels to ensure no visualization during silence
             if scaled_level < 0.02:
@@ -149,6 +175,11 @@ class SpeechRecognizer:
                 
             # Clamp between 0.0 and 1.0
             level = min(1.0, max(0.0, scaled_level))
+            
+            # Debug info for significant level changes (helps with tuning)
+            if level > 0.95:
+                print(f"Peak level: {level:.2f}, current: {self.current_audio_level:.6f}, max: {self.max_observed_level:.6f}, scale: {scale_factor:.2f}")
+            
             return level
     
     def process_audio(self):
