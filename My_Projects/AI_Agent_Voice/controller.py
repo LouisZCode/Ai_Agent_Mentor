@@ -23,8 +23,7 @@ class ChatbotController:
         self.view.set_voice_toggle_callback(self.handle_voice_toggle)
         self.view.set_select_mic_callback(self.handle_mic_selection)
         
-        # Set up audio level callback
-        self.view.set_audio_level_callback(self.get_audio_level)
+        # Audio level callback removed
         
         # Initialize model with the default selection from view
         self.model.model_name = self.view.get_selected_model()
@@ -45,11 +44,7 @@ class ChatbotController:
         except Exception as e:
             print(f"Error finding default microphone: {e}")
     
-    def get_audio_level(self):
-        """Get the current audio level for visualization"""
-        if self.speech_recognizer:
-            return self.speech_recognizer.get_audio_level()
-        return 0.0  # Default level when no recognizer is active
+    # Audio level method removed
     
     def reset_conversation(self):
         """Reset the conversation to initial state"""
