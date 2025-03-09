@@ -3,6 +3,7 @@ import sys
 import json
 import queue
 import threading
+import time
 import sounddevice as sd
 import numpy as np
 from vosk import Model, KaldiRecognizer
@@ -69,6 +70,7 @@ class SpeechRecognizer:
         self.should_stop = threading.Event()
         self.listening_thread = None
         self.callback = None
+        self.partial_callback = None  # New callback for partial results
         
         # Initialize model
         try:
@@ -87,16 +89,15 @@ class SpeechRecognizer:
         self.silent_threshold = 30  # Number of silent frames before processing
         self.current_speech = ""
         
-        # Audio level monitoring
-        self.current_audio_level = 0.0
-        self.audio_level_lock = threading.Lock()
-        self.audio_level_decay = 0.7  # How quickly the level falls (lower = faster)
+        # Variables for handling partial results
+        self.last_partial_time = 0
+        self.partial_delay = 0.1  # Seconds between partial updates (shorter for word-by-word)
+        self.last_partial_text = ""  # Track the last partial text to detect new words
         
-        # Dynamic level scaling
-        self.max_observed_level = 0.05  # Initial baseline (will adjust automatically)
-        self.max_level_decay = 0.9999  # Very slow decay for max level (0.9999 = retains max for longer)
-        self.target_max_scale = 0.8  # We aim to map the max level to this percentage of the full range
-        self.min_scale_factor = 5.0  # Minimum scale factor to avoid too low sensitivity
+        # Variables for handling silence detection
+        self.silence_start_time = 0
+        self.silence_timeout = 2.0  # 2 seconds of silence to trigger completion (reduced from 3)
+        self.word_callback = None  # Callback for individual words
     
     def find_device_by_name(self, name_substring):
         """Find a device by substring in its name"""
@@ -110,7 +111,7 @@ class SpeechRecognizer:
         
         return None  # No matching device found
         
-    def _audio_callback(self, indata, frames, time, status):
+    def _audio_callback(self, indata, frames, time_info, status):
         """Callback for sounddevice to process audio chunks"""
         if status:
             print(f"Audio status: {status}")
@@ -118,69 +119,37 @@ class SpeechRecognizer:
         # Add audio data to queue
         self.audio_queue.put(bytes(indata))
         
-        # Calculate energy level (for silence detection)
-        # Use RMS (root mean square) for better sensitivity
-        energy = np.sqrt(np.mean(np.square(indata)))
-        
-        # Update audio level meter (with lock for thread safety)
-        with self.audio_level_lock:
-            # If new level is higher, jump to it immediately
-            if energy > self.current_audio_level:
-                # Fast attack - jump to new level
-                self.current_audio_level = energy
-            # Otherwise decay slowly toward zero
-            else:
-                # Smooth release - decay toward zero
-                self.current_audio_level = self.current_audio_level * self.audio_level_decay
-            
-            # Dynamic range adjustment - track maximum observed level
-            if energy > self.max_observed_level:
-                # Update maximum (fast attack for new peaks)
-                self.max_observed_level = energy
-                # Print when max level changes significantly
-                print(f"New max audio level: {energy:.6f}")
-            else:
-                # Very slow decay for maximum to adapt to quieter environments over time
-                self.max_observed_level = self.max_observed_level * self.max_level_decay
+        # Calculate energy level (for silence detection only)
+        energy = np.mean(np.abs(indata))
+        current_time = time.time()
         
         # Simple silence detection
         if energy > self.silence_threshold:
             self.speech_detected = True
             self.silent_frames = 0
+            self.silence_start_time = 0  # Reset silence timer
         elif self.speech_detected:
             self.silent_frames += 1
+            
+            # Start silence timer if this is the beginning of silence
+            if self.silent_frames == 1:
+                self.silence_start_time = current_time
+            
+            # Check if silence timeout has been reached
+            if self.silence_start_time > 0 and (current_time - self.silence_start_time) > self.silence_timeout:
+                # If silence has lasted long enough, end the utterance
+                if self.callback and self.last_partial_text.strip():
+                    print(f"Silence detected for {self.silence_timeout}s - completing utterance: '{self.last_partial_text}'")
+                    self.callback(self.last_partial_text.strip())
+                    self.last_partial_text = ""  # Reset for next utterance
+                    self.silence_start_time = 0
+                    self.speech_detected = False
+            
+            # Traditional end-of-speech detection
             if self.silent_frames > self.silent_threshold:
                 self.speech_detected = False
     
-    def get_audio_level(self):
-        """Get the current audio input level (normalized)"""
-        with self.audio_level_lock:
-            # Prevent division by zero and ensure min sensitivity
-            if self.max_observed_level < 0.001:
-                scale_factor = self.min_scale_factor
-            else:
-                # Calculate dynamic scale factor based on observed maximum
-                # This ensures the max level will map to target_max_scale (e.g., 0.8)
-                scale_factor = self.target_max_scale / self.max_observed_level
-                
-                # Ensure scale factor doesn't go below minimum
-                scale_factor = max(scale_factor, self.min_scale_factor)
-            
-            # Scale the level using the dynamic scale factor
-            scaled_level = self.current_audio_level * scale_factor
-            
-            # Return 0 for very low levels to ensure no visualization during silence
-            if scaled_level < 0.02:
-                return 0.0
-                
-            # Clamp between 0.0 and 1.0
-            level = min(1.0, max(0.0, scaled_level))
-            
-            # Debug info for significant level changes (helps with tuning)
-            if level > 0.95:
-                print(f"Peak level: {level:.2f}, current: {self.current_audio_level:.6f}, max: {self.max_observed_level:.6f}, scale: {scale_factor:.2f}")
-            
-            return level
+    # Audio level method removed
     
     def process_audio(self):
         """Process audio data from the queue"""
@@ -189,13 +158,51 @@ class SpeechRecognizer:
                 # Get audio data from queue with timeout
                 audio_data = self.audio_queue.get(timeout=0.5)
                 
-                # Process audio chunk
+                # Check for partial results if we have a word callback and speech is detected
+                if (self.word_callback or self.partial_callback) and self.speech_detected:
+                    # Only get partial results at certain intervals to avoid flickering
+                    current_time = time.time()
+                    if current_time - self.last_partial_time > self.partial_delay:
+                        self.last_partial_time = current_time
+                        
+                        # Get partial result
+                        partial_json = self.recognizer.PartialResult()
+                        partial_result = json.loads(partial_json)
+                        
+                        # Extract text from partial result
+                        partial_text = partial_result.get('partial', '').strip()
+                        
+                        # Check if we have new words (by comparing with last partial text)
+                        if partial_text and partial_text != self.last_partial_text:
+                            # For word-by-word, extract just the new words
+                            if self.word_callback:
+                                # If previous text is a substring of current text, extract only new words
+                                if partial_text.startswith(self.last_partial_text) and len(self.last_partial_text) > 0:
+                                    new_words = partial_text[len(self.last_partial_text):].strip()
+                                    if new_words:  # Only call if there are actual new words
+                                        self.word_callback(new_words)
+                                else:
+                                    # If not a simple extension, just use the whole new text
+                                    # This handles cases where Vosk corrects previous words
+                                    self.word_callback(partial_text)
+                            
+                            # For standard partial updates, send the full text
+                            if self.partial_callback:
+                                self.partial_callback(partial_text)
+                            
+                            # Save current text for comparison next time
+                            self.last_partial_text = partial_text
+                
+                # Process audio chunk for final results
                 if self.recognizer.AcceptWaveform(audio_data):
                     result_json = self.recognizer.Result()
                     result = json.loads(result_json)
                     
                     # Extract text from result
                     text = result.get('text', '').strip()
+                    
+                    # Reset state variables
+                    self.last_partial_text = ""
                     
                     # If we have text and a callback, call it
                     if text and self.callback:
@@ -208,14 +215,20 @@ class SpeechRecognizer:
                 print(f"Error processing audio: {e}")
                 continue
     
-    def start_listening(self, callback):
+    def start_listening(self, callback, partial_callback=None, word_callback=None):
         """Start listening for speech"""
         if self.listening_thread and self.listening_thread.is_alive():
             print("Already listening")
             return
         
-        # Set callback function
+        # Set callback functions
         self.callback = callback
+        self.partial_callback = partial_callback
+        self.word_callback = word_callback
+        
+        # Reset state variables
+        self.last_partial_text = ""
+        self.silence_start_time = 0
         
         # Reset stop event
         self.should_stop.clear()
@@ -253,6 +266,8 @@ class SpeechRecognizer:
             print(f"Error starting audio stream: {e}")
             self.should_stop.set()
             self.callback = None
+            self.partial_callback = None
+            self.word_callback = None
             return False
     
     def stop_listening(self):
@@ -260,6 +275,12 @@ class SpeechRecognizer:
         if not self.listening_thread or not self.listening_thread.is_alive():
             print("Not currently listening")
             return
+        
+        # Check if we have a partial utterance that hasn't been finalized due to silence
+        if self.last_partial_text.strip() and self.callback:
+            # Send the accumulated partial text as a final result
+            print(f"Finalizing utterance on stop: '{self.last_partial_text}'")
+            self.callback(self.last_partial_text.strip())
         
         # Set stop event and wait for thread to finish
         self.should_stop.set()
@@ -271,6 +292,16 @@ class SpeechRecognizer:
         
         # Wait for thread to finish
         self.listening_thread.join(timeout=1.0)
+        
+        # Clear callbacks
+        self.callback = None
+        self.partial_callback = None
+        self.word_callback = None
+        
+        # Reset state variables
+        self.last_partial_text = ""
+        self.silence_start_time = 0
+        
         print("Stopped listening")
 
     @staticmethod

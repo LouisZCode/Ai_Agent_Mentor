@@ -213,6 +213,12 @@ class ChatbotView:
         self.conversation_display.tag_configure("system", foreground="gray")
         self.conversation_display.tag_configure("thinking", foreground="purple")
         self.conversation_display.tag_configure("voice", foreground="orange")
+        self.conversation_display.tag_configure("voice_typing", foreground="#FF8800")
+        
+        # Voice input variables
+        self.voice_input_active = False
+        self.voice_line_start = None
+        self.voice_text_start = None
         
         # Create improved input area
         input_frame = ttk.Frame(main_frame)
@@ -287,18 +293,83 @@ class ChatbotView:
     
     def _on_voice_toggle(self):
         """Handle voice button click"""
-        self.voice_active = not self.voice_active
+        # Toggle active state
+        new_active_state = not self.voice_active
         
-        if self.voice_active:
+        # Update UI immediately to give instant feedback
+        if new_active_state:
             self.voice_button.config(text="🎤 Disable Voice")
-            self.set_status("Voice input active - speak clearly")
         else:
             self.voice_button.config(text="🎤 Enable Voice")
-            self.set_status("Voice input disabled")
         
-        # Notify controller about voice toggle
+        # Notify controller (which will set the actual state based on success/failure)
         if self.voice_toggle_callback:
-            self.voice_toggle_callback(self.voice_active)
+            self.voice_toggle_callback(new_active_state)
+    
+    def start_voice_input(self):
+        """Initialize the voice input display"""
+        # If we already have voice input active, clean up first
+        if self.voice_input_active:
+            self.end_voice_input()
+        
+        self.conversation_display.config(state=tk.NORMAL)
+        
+        # Add the speaker line
+        self.voice_line_start = self.conversation_display.index(tk.END)
+        self.conversation_display.insert(tk.END, "You (voice):\n", "speaker")
+        
+        # Mark where the text will start
+        self.voice_text_start = self.conversation_display.index(tk.END)
+        
+        # Set active flag
+        self.voice_input_active = True
+        
+        # Make sure it's visible
+        self.conversation_display.see(tk.END)
+        self.conversation_display.config(state=tk.DISABLED)
+    
+    def append_voice_text(self, text):
+        """Append new word(s) to the voice input display"""
+        if not self.voice_input_active:
+            # If voice input isn't active yet, start it
+            self.start_voice_input()
+        
+        self.conversation_display.config(state=tk.NORMAL)
+        
+        # Append the new text with the voice_typing tag
+        self.conversation_display.insert(tk.END, f"{text} ", "voice_typing")
+        
+        # Make sure it's visible
+        self.conversation_display.see(tk.END)
+        self.conversation_display.config(state=tk.DISABLED)
+    
+    def end_voice_input(self):
+        """Finalize the voice input display"""
+        if not self.voice_input_active:
+            return
+        
+        self.conversation_display.config(state=tk.NORMAL)
+        
+        # Add a double newline to separate from next message
+        self.conversation_display.insert(tk.END, "\n\n")
+        
+        # Change text tag from voice_typing to final voice tag
+        if self.voice_text_start:
+            # Get all text from the voice input
+            text_end = self.conversation_display.index(tk.END + "-3c")  # Account for the \n\n we just added
+            
+            # Change tag from temporary to final
+            self.conversation_display.tag_remove("voice_typing", self.voice_text_start, text_end)
+            self.conversation_display.tag_add("voice", self.voice_text_start, text_end)
+        
+        # Reset markers
+        self.voice_input_active = False
+        self.voice_line_start = None
+        self.voice_text_start = None
+        
+        # Make sure it's visible
+        self.conversation_display.see(tk.END)
+        self.conversation_display.config(state=tk.DISABLED)
     
     # Audio visualization methods removed
     
@@ -388,6 +459,14 @@ class ChatbotView:
     
     def display_user_message(self, message, is_voice=False):
         """Display a user message in the conversation"""
+        # If we have an active voice input, end it first
+        if self.voice_input_active:
+            self.end_voice_input()
+            # Since we just added the speaker line and the message in end_voice_input,
+            # we don't need to do it again
+            return
+        
+        # Normal display logic
         self.conversation_display.config(state=tk.NORMAL)
         
         if is_voice:
@@ -408,8 +487,18 @@ class ChatbotView:
         # Reset animation frame
         self.animation_frame = 0
         
-        # Insert AI speaker line
+        # Insert AI speaker line with proper spacing
         self.conversation_display.config(state=tk.NORMAL)
+        
+        # Ensure there's proper spacing before AI's response
+        current_position = self.conversation_display.index(tk.END + "-1c")
+        last_chars = self.conversation_display.get(f"{current_position}-2c", current_position)
+        
+        # If we don't already have a double newline, add proper spacing
+        if last_chars != "\n\n":
+            self.conversation_display.insert(tk.END, "\n")
+        
+        # Now add the AI speaker tag
         self.conversation_display.insert(tk.END, "AI:\n", "speaker")
         
         # Insert initial thinking text
@@ -475,6 +564,9 @@ class ChatbotView:
         self.conversation_display.insert(tk.END, "\n\n")
         self.conversation_display.see(tk.END)
         self.conversation_display.config(state=tk.DISABLED)
+        
+        # Ensure we're ready for a fresh voice input next time
+        self.voice_input_active = False  # Reset voice input state
     
     def start_response_checker(self, check_function):
         """Start the response checker thread"""

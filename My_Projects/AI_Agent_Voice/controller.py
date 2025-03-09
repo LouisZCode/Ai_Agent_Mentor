@@ -14,7 +14,7 @@ class ChatbotController:
         # Initialize speech recognizer (None until activated)
         self.speech_recognizer = None
         self.selected_mic_index = None
-        self.default_device_name = "Input 1 (2- SSL 2 USB Audio Dev"  # Set your default device here
+        self.default_device_name = "Input 1 (2- SSL 2 USB Audio Dev)"  # Fixed closing parenthesis
         
         # Connect view callbacks
         self.view.set_send_callback(self.handle_user_message)
@@ -130,10 +130,20 @@ class ChatbotController:
                         default_device_name=self.default_device_name
                     )
                 
-                # Start listening with callback
-                success = self.speech_recognizer.start_listening(self.handle_voice_input)
+                # Start voice UI by clearing any previous voice display
+                self.view.start_voice_input()
+                
+                # Start listening with callbacks for both word and final results
+                success = self.speech_recognizer.start_listening(
+                    callback=self.handle_voice_input,
+                    word_callback=self.handle_word_input
+                )
+                
                 if success:
                     self.view.set_status("Voice input active - speak clearly")
+                    # Ensure button shows correct state
+                    self.view.voice_active = True
+                    self.view.voice_button.config(text="🎤 Disable Voice")
                 else:
                     # If failed to start, reset the button state
                     self.view.voice_active = False
@@ -147,10 +157,24 @@ class ChatbotController:
             # Stop listening
             if self.speech_recognizer:
                 self.speech_recognizer.stop_listening()
+                # End voice input display
+                self.view.end_voice_input()
+            
+            # Ensure button shows correct state
+            self.view.voice_active = False
+            self.view.voice_button.config(text="🎤 Enable Voice")
             self.view.set_status("Voice input disabled")
     
+    def handle_word_input(self, text):
+        """Handle new word(s) detected in speech"""
+        if not text:
+            return
+        
+        # Update the display with the new word(s)
+        self.view.append_voice_text(text)
+    
     def handle_voice_input(self, text):
-        """Handle voice input text"""
+        """Handle complete voice input text"""
         if not text:
             return
         
@@ -162,8 +186,10 @@ class ChatbotController:
         # Add to memory
         self.model.add_to_memory("user", message)
         
-        # Update UI
-        self.view.display_user_message(message, is_voice)
+        # Update UI (for keyboard input - voice input already updated in real-time)
+        if not is_voice:
+            self.view.display_user_message(message)
+            
         self.view.start_thinking_animation()
         self.view.set_status("Thinking...")
         self.view.set_input_enabled(False)
@@ -197,3 +223,6 @@ class ChatbotController:
             self.view.display_ai_response(response)
             self.view.set_status("Ready")
             self.view.set_input_enabled(True)
+            
+            # Ensure the next voice input will get a fresh speaker line
+            # This is crucial to fix the issue with missing "You (voice):" for subsequent inputs
