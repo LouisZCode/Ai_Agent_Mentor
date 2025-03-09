@@ -6,6 +6,8 @@ import sys
 import re
 import numpy as np
 import sounddevice as sd
+import shutil
+from datetime import datetime
 
 class TextToSpeech:
     """
@@ -83,6 +85,9 @@ class TextToSpeech:
             except Exception as e:
                 print(f"Could not load speakers, using default: {e}")
             
+            # Load any existing custom voices
+            self._load_custom_voices()
+            
             # Test the audio system to make sure output works
             self.test_audio()
             
@@ -136,6 +141,26 @@ class TextToSpeech:
         except ImportError:
             print("PyTorch not found. Please install: pip install torch")
             raise
+    
+    def _load_custom_voices(self):
+        """Load any existing custom voices from the custom_voices directory"""
+        try:
+            custom_voices_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "custom_voices")
+            if not os.path.exists(custom_voices_dir):
+                os.makedirs(custom_voices_dir, exist_ok=True)
+                return
+                
+            # List all .wav files in the directory
+            for filename in os.listdir(custom_voices_dir):
+                if filename.endswith(".wav"):
+                    voice_path = os.path.join(custom_voices_dir, filename)
+                    voice_name = os.path.splitext(filename)[0]
+                    
+                    # Add to speakers dictionary
+                    self.speakers[voice_name] = voice_path
+                    print(f"Loaded custom voice: {voice_name}")
+        except Exception as e:
+            print(f"Error loading custom voices: {e}")
     
     def get_available_speakers(self):
         """Get list of available voices"""
@@ -235,12 +260,22 @@ class TextToSpeech:
                     self.is_speaking = True
                     print(f"🔊 Speaking: '{text}'")
                     
-                    # Generate audio with current settings
-                    audio = self.tts.tts(
-                        text=text,
-                        speaker=self.current_speaker,
-                        language=self.language
-                    )
+                    # Check if we're using a custom voice (from a wav file)
+                    if isinstance(self.speakers.get(self.current_speaker), str) and self.speakers[self.current_speaker].endswith('.wav'):
+                        # Use custom voice (cloned)
+                        speaker_wav = self.speakers[self.current_speaker]
+                        audio = self.tts.tts(
+                            text=text,
+                            speaker_wav=speaker_wav,
+                            language=self.language
+                        )
+                    else:
+                        # Use built-in voice
+                        audio = self.tts.tts(
+                            text=text,
+                            speaker=self.current_speaker,
+                            language=self.language
+                        )
                     
                     # Convert to proper format for sounddevice
                     audio_np = np.array(audio)
@@ -338,3 +373,93 @@ class TextToSpeech:
         except Exception as e:
             print(f"Error playing test audio: {e}")
             return False
+            
+    def clone_voice(self, audio_data=None, audio_file_path=None, voice_name=None):
+        """Clone a voice from audio data or file and add it to available voices"""
+        if not self.is_initialized or not self.tts:
+            print("TTS engine not initialized. Cannot clone voice.")
+            return False, "TTS engine not initialized"
+            
+        if audio_data is None and audio_file_path is None:
+            return False, "No audio provided for voice cloning"
+            
+        # Generate a name if not provided
+        if not voice_name:
+            voice_name = f"ClonedVoice_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            
+        try:
+            # Create custom voices directory if it doesn't exist
+            custom_voices_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "custom_voices")
+            os.makedirs(custom_voices_dir, exist_ok=True)
+            
+            # Determine the file path to save the voice sample
+            target_file_path = os.path.join(custom_voices_dir, f"{voice_name}.wav")
+            
+            # If audio data is provided (from recording), save it to a WAV file
+            if audio_data is not None:
+                import wave
+                with wave.open(target_file_path, 'wb') as wf:
+                    wf.setnchannels(1)  # Mono
+                    wf.setsampwidth(2)   # 16-bit
+                    wf.setframerate(24000)  # 24kHz sampling rate
+                    wf.writeframes(audio_data.tobytes())
+            # If file path is provided, copy the file
+            elif audio_file_path:
+                shutil.copy(audio_file_path, target_file_path)
+                
+            # Test if the voice clone works
+            print(f"Testing voice clone with file: {target_file_path}")
+            test_audio = self.tts.tts(
+                text="Voice cloning test successful.",
+                speaker_wav=target_file_path,
+                language="en"
+            )
+            
+            # If we reached here, cloning was successful
+            # Add to available speakers dictionary
+            self.speakers[voice_name] = target_file_path
+            print(f"Voice cloning successful. Added '{voice_name}' to available voices.")
+            
+            return True, voice_name
+            
+        except Exception as e:
+            print(f"Error cloning voice: {e}")
+            # Clean up any partial files
+            try:
+                if os.path.exists(target_file_path):
+                    os.remove(target_file_path)
+            except:
+                pass
+            return False, str(e)
+    
+    def get_cloned_voices(self):
+        """Get a list of cloned voices"""
+        cloned_voices = []
+        for name, path in self.speakers.items():
+            if isinstance(path, str) and path.endswith('.wav'):
+                cloned_voices.append(name)
+        return cloned_voices
+    
+    def record_voice_sample(self, duration=5, sample_rate=24000):
+        """Record a voice sample for cloning"""
+        try:
+            print(f"Recording voice sample for {duration} seconds...")
+            # Record audio
+            recording = sd.rec(int(duration * sample_rate), 
+                              samplerate=sample_rate, 
+                              channels=1,
+                              dtype='float32')
+            
+            # Wait for recording to complete
+            sd.wait()
+            
+            # Normalize audio (ensure values are between -1 and 1)
+            if np.max(np.abs(recording)) > 0:
+                recording = recording / np.max(np.abs(recording)) * 0.9
+                
+            print("Recording complete!")
+            return True, recording
+        
+        except Exception as e:
+            print(f"Error recording voice: {e}")
+            return False, str(e)

@@ -55,6 +55,9 @@ class ChatbotController:
         self.view.set_tts_toggle_callback(self.handle_tts_toggle)
         self.view.set_voice_change_callback(self.handle_voice_change)
         
+        # Set callbacks for voice cloning
+        self.view.set_clone_voice_callback(self.handle_voice_cloning)
+        
         # Initialize model with the default selection from view
         self.model.model_name = self.view.get_selected_model()
         
@@ -74,6 +77,43 @@ class ChatbotController:
         except Exception as e:
             print(f"Error finding default microphone: {e}")
     
+    def handle_voice_cloning(self):
+        """Handle voice cloning request"""
+        if not self.tts or not hasattr(self.tts, 'is_initialized') or not self.tts.is_initialized:
+            self.view.set_status("TTS not initialized. Cannot clone voice.")
+            return
+        
+        # Define callbacks for the voice cloning dialog
+        def record_callback():
+            """Callback to record audio for voice cloning"""
+            try:
+                return self.tts.record_voice_sample(duration=5)
+            except Exception as e:
+                print(f"Error recording voice sample: {e}")
+                return False, str(e)
+        
+        def clone_callback(audio_data, voice_name):
+            """Callback to clone voice from recorded audio"""
+            try:
+                success, result = self.tts.clone_voice(audio_data=audio_data, voice_name=voice_name)
+                
+                # If cloning was successful, update the voice list
+                if success:
+                    voices = self.tts.get_available_speakers()
+                    self.view.update_voice_list(voices)
+                    
+                    # Automatically select the new voice
+                    self.view.voice_var.set(result)
+                    self.tts.set_speaker(result)
+                
+                return success, result
+            except Exception as e:
+                print(f"Error cloning voice: {e}")
+                return False, str(e)
+        
+        # Show the voice cloning dialog
+        self.view.show_voice_cloning_dialog(record_callback, clone_callback)
+    
     def check_tts_initialization(self):
         """Check if TTS initialization is complete"""
         if not self.tts:
@@ -89,6 +129,7 @@ class ChatbotController:
                 self.view.update_voice_list(voices)
                 self.view.set_status("TTS initialized and ready")
                 self.view.tts_checkbox.config(state="normal") # Enable the TTS checkbox
+                self.view.enable_voice_cloning(True)  # Enable voice cloning button
                 self.tts_init_checked = True
                 print("TTS initialization complete!")
             else:

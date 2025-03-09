@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext, ttk, BooleanVar, StringVar, font, Toplevel, Canvas
+from tkinter import scrolledtext, ttk, BooleanVar, StringVar, font, Toplevel, Canvas, messagebox
 import time
 
 class MicrophoneSelector:
@@ -93,6 +93,238 @@ class MicrophoneSelector:
         """Cancel selection"""
         self.dialog.destroy()
 
+
+class VoiceCloningDialog:
+    """Dialog for voice cloning"""
+    def __init__(self, parent, record_callback=None, clone_callback=None):
+        self.parent = parent
+        self.record_callback = record_callback
+        self.clone_callback = clone_callback
+        self.dialog = None
+        self.recording = None
+        self.is_recording = False
+        self.recording_thread = None
+        self.progress_var = None
+        self.progress_bar = None
+        self.status_var = None
+        self.record_button = None
+        self.clone_button = None
+        self.voice_name_entry = None
+    
+    def show(self):
+        # Create dialog window
+        self.dialog = Toplevel(self.parent)
+        self.dialog.title("Clone Voice")
+        self.dialog.geometry("400x380")
+        self.dialog.transient(self.parent)
+        self.dialog.grab_set()
+        
+        # Center the dialog
+        self.dialog.update_idletasks()
+        width = self.dialog.winfo_width()
+        height = self.dialog.winfo_height()
+        x = (self.parent.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.parent.winfo_screenheight() // 2) - (height // 2)
+        self.dialog.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Create content
+        frame = ttk.Frame(self.dialog, padding="20")
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Instructions
+        ttk.Label(frame, text="Voice Cloning Setup", font=("Helvetica", 14, "bold")).pack(pady=(0, 10))
+        
+        # Voice Name Entry
+        name_frame = ttk.Frame(frame)
+        name_frame.pack(fill=tk.X, pady=(5, 15))
+        
+        ttk.Label(name_frame, text="Voice Name:").pack(side=tk.LEFT)
+        self.voice_name_entry = ttk.Entry(name_frame, width=25)
+        self.voice_name_entry.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+        self.voice_name_entry.insert(0, "My Custom Voice")
+        
+        # Instructions
+        instructions = (
+            "1. Click 'Record Sample' and speak clearly for 5 seconds\n"
+            "2. Say a full sentence with varied intonation\n"
+            "3. Maintain consistent distance from microphone\n"
+            "4. Avoid background noise during recording\n"
+            "5. Click 'Clone Voice' when satisfied with recording"
+        )
+        
+        instructions_frame = ttk.LabelFrame(frame, text="Instructions")
+        instructions_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        ttk.Label(instructions_frame, text=instructions, justify=tk.LEFT).pack(padx=10, pady=10)
+        
+        # Progress bar for recording
+        progress_frame = ttk.Frame(frame)
+        progress_frame.pack(fill=tk.X, pady=10)
+        
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(progress_frame, variable=self.progress_var, maximum=100)
+        self.progress_bar.pack(fill=tk.X)
+        
+        # Status label
+        self.status_var = tk.StringVar(value="Ready to record")
+        status_label = ttk.Label(frame, textvariable=self.status_var)
+        status_label.pack(pady=5)
+        
+        # Buttons
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        # Record button
+        self.record_button = ttk.Button(
+            btn_frame,
+            text="Record Sample (5s)",
+            command=self._on_record
+        )
+        self.record_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Clone button (initially disabled)
+        self.clone_button = ttk.Button(
+            btn_frame,
+            text="Clone Voice",
+            command=self._on_clone,
+            state="disabled"
+        )
+        self.clone_button.pack(side=tk.LEFT)
+        
+        # Cancel button
+        ttk.Button(
+            btn_frame,
+            text="Cancel",
+            command=self.dialog.destroy
+        ).pack(side=tk.RIGHT)
+        
+        # Make dialog modal
+        self.dialog.wait_window()
+    
+    def _on_record(self):
+        """Handle record button click"""
+        if self.is_recording:
+            self.status_var.set("Recording in progress, please wait...")
+            return
+        
+        # Reset previous recording if any
+        self.recording = None
+        self.progress_var.set(0)
+        self.status_var.set("Starting recording in 1 second...")
+        self.record_button.config(state="disabled")
+        self.clone_button.config(state="disabled")
+        
+        # Update UI before recording starts
+        self.dialog.update()
+        
+        # Short delay before recording starts
+        self.dialog.after(1000, self._start_recording)
+    
+    def _start_recording(self):
+        """Start the actual recording process"""
+        self.is_recording = True
+        self.status_var.set("Recording... Speak now!")
+        
+        # Start a timer to update progress bar
+        self._update_progress_bar(0, 5.0)
+        
+        # Call the record callback
+        if self.record_callback:
+            # Start recording in a separate thread to keep UI responsive
+            import threading
+            self.recording_thread = threading.Thread(target=self._record_thread)
+            self.recording_thread.daemon = True
+            self.recording_thread.start()
+    
+    def _record_thread(self):
+        """Background thread for recording"""
+        try:
+            success, result = self.record_callback()
+            
+            # Update UI in main thread
+            self.dialog.after(0, lambda: self._recording_complete(success, result))
+        except Exception as e:
+            self.dialog.after(0, lambda: self._recording_complete(False, str(e)))
+    
+    def _recording_complete(self, success, result):
+        """Called when recording is complete"""
+        self.is_recording = False
+        
+        if success:
+            self.recording = result
+            self.status_var.set("Recording complete! Click 'Clone Voice' to continue.")
+            self.clone_button.config(state="normal")
+        else:
+            self.status_var.set(f"Recording failed: {result}")
+        
+        self.record_button.config(state="normal")
+    
+    def _update_progress_bar(self, current_time, total_time):
+        """Update the progress bar during recording"""
+        if not self.is_recording:
+            return
+            
+        # Calculate percentage
+        percentage = (current_time / total_time) * 100
+        self.progress_var.set(percentage)
+        
+        # If not completed yet, schedule another update
+        if current_time < total_time:
+            self.dialog.after(100, lambda: self._update_progress_bar(current_time + 0.1, total_time))
+        else:
+            # Progress complete - reset progress bar after a delay
+            self.dialog.after(500, lambda: self.progress_var.set(100))
+    
+    def _on_clone(self):
+        """Handle clone button click"""
+        if not self.recording:
+            self.status_var.set("No recording available. Record a sample first.")
+            return
+            
+        voice_name = self.voice_name_entry.get().strip()
+        if not voice_name:
+            self.status_var.set("Please enter a name for this voice.")
+            return
+            
+        self.status_var.set("Cloning voice... This may take a moment.")
+        self.clone_button.config(state="disabled")
+        self.record_button.config(state="disabled")
+        
+        # Update UI
+        self.dialog.update()
+        
+        # Call the clone callback
+        if self.clone_callback:
+            # Start cloning in a separate thread to keep UI responsive
+            import threading
+            clone_thread = threading.Thread(
+                target=lambda: self._clone_thread(voice_name)
+            )
+            clone_thread.daemon = True
+            clone_thread.start()
+    
+    def _clone_thread(self, voice_name):
+        """Background thread for cloning"""
+        try:
+            success, result = self.clone_callback(self.recording, voice_name)
+            
+            # Update UI in main thread
+            self.dialog.after(0, lambda: self._cloning_complete(success, result))
+        except Exception as e:
+            self.dialog.after(0, lambda: self._cloning_complete(False, str(e)))
+    
+    def _cloning_complete(self, success, result):
+        """Called when cloning is complete"""
+        if success:
+            self.status_var.set(f"Voice '{result}' successfully cloned!")
+            messagebox.showinfo("Success", f"Voice '{result}' has been successfully cloned and added to your voice list!")
+            self.dialog.destroy()
+        else:
+            self.status_var.set(f"Cloning failed: {result}")
+            self.clone_button.config(state="normal")
+            self.record_button.config(state="normal")
+
+
 class ChatbotView:
     """
     View class that handles the UI
@@ -128,6 +360,7 @@ class ChatbotView:
         self.select_mic_callback = None
         self.tts_toggle_callback = None
         self.voice_change_callback = None
+        self.clone_voice_callback = None
     
     def _setup_ui(self):
         """Set up the UI components"""
@@ -222,6 +455,15 @@ class ChatbotView:
         )
         self.voice_dropdown.pack(side=tk.LEFT)
         self.voice_dropdown.bind("<<ComboboxSelected>>", self._on_voice_change)
+        
+        # Voice cloning button
+        self.clone_voice_button = ttk.Button(
+            tts_frame,
+            text="Clone Voice",
+            command=self._on_clone_voice
+        )
+        self.clone_voice_button.pack(side=tk.LEFT, padx=(10, 0))
+        self.clone_voice_button.config(state="disabled")  # Disabled until TTS is ready
         
         # Update thinking checkbox visibility based on selected model
         self._update_thinking_checkbox_visibility()
@@ -346,6 +588,11 @@ class ChatbotView:
         """Handle voice selection change"""
         if self.voice_change_callback:
             self.voice_change_callback(self.voice_var.get())
+    
+    def _on_clone_voice(self):
+        """Handle voice cloning button click"""
+        if self.clone_voice_callback:
+            self.clone_voice_callback()
         
     def set_tts_toggle_callback(self, callback):
         """Set callback for TTS toggle"""
@@ -354,6 +601,10 @@ class ChatbotView:
     def set_voice_change_callback(self, callback):
         """Set callback for voice change"""
         self.voice_change_callback = callback
+    
+    def set_clone_voice_callback(self, callback):
+        """Set callback for voice cloning"""
+        self.clone_voice_callback = callback
         
     def update_voice_list(self, voices):
         """Update the list of available voices"""
@@ -365,6 +616,10 @@ class ChatbotView:
             self.voice_var.set(current)
         elif voices:
             self.voice_var.set(voices[0])
+    
+    def enable_voice_cloning(self, enabled=True):
+        """Enable or disable the voice cloning button"""
+        self.clone_voice_button.config(state="normal" if enabled else "disabled")
     
     def start_voice_input(self):
         """Initialize the voice input display"""
@@ -435,6 +690,11 @@ class ChatbotView:
         """Show microphone selection dialog"""
         selector = MicrophoneSelector(self.root, microphones)
         return selector.show()
+    
+    def show_voice_cloning_dialog(self, record_callback=None, clone_callback=None):
+        """Show voice cloning dialog"""
+        dialog = VoiceCloningDialog(self.root, record_callback, clone_callback)
+        dialog.show()
     
     def _on_send(self, event=None):
         """Handle send button click or Enter key"""
