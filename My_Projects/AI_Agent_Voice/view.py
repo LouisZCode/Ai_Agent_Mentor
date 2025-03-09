@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext, ttk, BooleanVar, StringVar, font, Toplevel
+from tkinter import scrolledtext, ttk, BooleanVar, StringVar, font, Toplevel, Canvas
 import time
 
 class MicrophoneSelector:
@@ -114,6 +114,11 @@ class ChatbotView:
             "Thinking      • "
         ]
         
+        # Audio visualization variables
+        self.audio_viz_timer_id = None
+        self.audio_viz_canvas = None
+        self.audio_level_callback = None
+        
         # Available models
         self.available_models = ["qwq:latest", "llama3.1:8b", "deepseek-r1:32b"]
         
@@ -180,6 +185,24 @@ class ChatbotView:
             command=self._on_select_mic
         )
         self.mic_button.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Audio level visualization (hidden by default)
+        self.audio_viz_frame = ttk.Frame(voice_frame)
+        self.audio_viz_frame.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # Canvas for audio level visualization
+        self.audio_viz_canvas = Canvas(
+            self.audio_viz_frame, 
+            width=100,  # Width of the level meter
+            height=20,  # Height of the level meter
+            bg="light gray",
+            highlightthickness=1,
+            highlightbackground="gray"
+        )
+        self.audio_viz_canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Initially hide the visualization
+        self.audio_viz_frame.pack_forget()
         
         # Voice input toggle button
         self.voice_active = False
@@ -290,13 +313,94 @@ class ChatbotView:
         if self.voice_active:
             self.voice_button.config(text="🎤 Disable Voice")
             self.set_status("Voice input active - speak clearly")
+            
+            # Show and start the audio visualization
+            self.audio_viz_frame.pack(side=tk.LEFT, padx=(0, 10))
+            self.start_audio_visualization()
         else:
             self.voice_button.config(text="🎤 Enable Voice")
             self.set_status("Voice input disabled")
+            
+            # Stop and hide the audio visualization
+            self.stop_audio_visualization()
+            self.audio_viz_frame.pack_forget()
         
         # Notify controller about voice toggle
         if self.voice_toggle_callback:
             self.voice_toggle_callback(self.voice_active)
+    
+    def start_audio_visualization(self):
+        """Start the audio level visualization"""
+        self.stop_audio_visualization()  # Stop any existing visualization
+        
+        def update_viz():
+            if not self.voice_active or not self.audio_level_callback:
+                return
+            
+            # Get current audio level (0.0 to 1.0) from callback
+            level = self.audio_level_callback()
+            
+            # Update visualization
+            self._update_audio_viz(level)
+            
+            # Schedule next update
+            self.audio_viz_timer_id = self.root.after(33, update_viz)  # ~30 fps
+        
+        # Start the updates
+        update_viz()
+    
+    def _update_audio_viz(self, level):
+        """Update the audio level visualization with a new level (0.0 to 1.0)"""
+        if not self.audio_viz_canvas:
+            return
+        
+        # Clear canvas
+        self.audio_viz_canvas.delete("all")
+        
+        # Get canvas dimensions
+        width = self.audio_viz_canvas.winfo_width()
+        height = self.audio_viz_canvas.winfo_height()
+        
+        # Ensure we have dimensions
+        if width < 10 or height < 5:
+            width = 100
+            height = 20
+        
+        # Calculate bar width based on level
+        bar_width = int(width * level)
+        
+        # Determine color based on level
+        if level < 0.3:
+            color = "#4CAF50"  # Green
+        elif level < 0.6:
+            color = "#FFC107"  # Yellow
+        else:
+            color = "#F44336"  # Red
+        
+        # Draw the audio level bar
+        if bar_width > 0:
+            self.audio_viz_canvas.create_rectangle(
+                0, 0, bar_width, height, 
+                fill=color, outline="", width=0
+            )
+        
+        # Draw tick marks for reference
+        for i in range(1, 10):
+            x = width * i/10
+            self.audio_viz_canvas.create_line(
+                x, height, x, height-5, 
+                fill="gray", width=1
+            )
+    
+    def stop_audio_visualization(self):
+        """Stop the audio level visualization"""
+        if self.audio_viz_timer_id:
+            self.root.after_cancel(self.audio_viz_timer_id)
+            self.audio_viz_timer_id = None
+    
+    def set_audio_level_callback(self, callback):
+        """Set the callback function to get the current audio level"""
+        self.audio_level_callback = callback
     
     def show_microphone_selector(self, microphones):
         """Show microphone selection dialog"""

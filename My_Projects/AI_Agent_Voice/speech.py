@@ -86,6 +86,12 @@ class SpeechRecognizer:
         self.silent_frames = 0
         self.silent_threshold = 30  # Number of silent frames before processing
         self.current_speech = ""
+        
+        # Audio level monitoring
+        self.current_audio_level = 0.0
+        self.audio_level_lock = threading.Lock()
+        self.audio_level_decay = 0.8  # How quickly the level falls (lower = faster)
+        self.audio_level_scale = 5.0  # Multiplier to make levels more visible
     
     def find_device_by_name(self, name_substring):
         """Find a device by substring in its name"""
@@ -110,6 +116,15 @@ class SpeechRecognizer:
         # Calculate energy level (for silence detection)
         energy = np.mean(np.abs(indata))
         
+        # Update audio level meter (with lock for thread safety)
+        with self.audio_level_lock:
+            # If new level is higher, jump to it immediately
+            if energy > self.current_audio_level:
+                self.current_audio_level = energy
+            # Otherwise decay slowly toward zero
+            else:
+                self.current_audio_level = self.current_audio_level * self.audio_level_decay
+        
         # Simple silence detection
         if energy > self.silence_threshold:
             self.speech_detected = True
@@ -118,6 +133,13 @@ class SpeechRecognizer:
             self.silent_frames += 1
             if self.silent_frames > self.silent_threshold:
                 self.speech_detected = False
+    
+    def get_audio_level(self):
+        """Get the current audio input level (normalized)"""
+        with self.audio_level_lock:
+            # Scale and clamp between 0.0 and 1.0
+            level = min(1.0, max(0.0, self.current_audio_level * self.audio_level_scale))
+            return level
     
     def process_audio(self):
         """Process audio data from the queue"""
@@ -249,7 +271,8 @@ if __name__ == "__main__":
         print("Listening for speech. Press Ctrl+C to exit.")
         try:
             while True:
-                pass
+                print(f"Audio level: {'#' * int(sr.get_audio_level() * 50)}")
+                time.sleep(0.1)
         except KeyboardInterrupt:
             sr.stop_listening()
             print("Stopped listening.")
